@@ -31,6 +31,7 @@ object Endpoints {
   val invalidResultsResponse: String = ConfigFactory.load().getString("validation-service.test-messages.invalid-results-response")
   val reportStillRunning: String = ConfigFactory.load().getString("validation-service.test-messages.report-still-running")
   val successfullyApplied: String = ConfigFactory.load().getString("validation-service.test-messages.successfully-applied")
+  val reportStatusFinished: String = ConfigFactory.load().getString("validation-service.report-statuses.finished")
 
   implicit val decodeTest: Encoder[Test] = deriveEncoder[Test]
 
@@ -41,8 +42,8 @@ object Endpoints {
         resultsFromSchedulerService match {
           case Left(res) => Ok(TestResults(statusFailed, List[Test](), invalidSchedulerResponse))
           case Right(res) =>
-            if (res.status != "FINISHED") {
-              Ok(TestResults(statusScheduled, List[Test](), reportStillRunning))
+            if (res.status != reportStatusFinished) {
+              Ok(TestResults(statusScheduled, List[Test](), reportStillRunning + ", jobId " + res.jobId))
             }
             else {
               val resultsFromRsultsService = getResultsFromResultsService(res.jobId)
@@ -59,25 +60,35 @@ object Endpoints {
     val jobName: String = lciTestRequestBody.lciRequestBody.jobName
     val campaignId: Int = lciTestRequestBody.lciRequestBody.campaignId
     val reportDate: String = lciTestRequestBody.lciRequestBody.reportDate
-    val response: HttpResponse[String] = Http(schedulerUrl).postData(
-      s"""
-         |{
-         |	"jobName": "$jobName",
-         |	"campaignId": $campaignId,
-         |	"reportDate": "$reportDate"
-         |}
+    try {
+      val response: HttpResponse[String] = Http(schedulerUrl).postData(
+        s"""
+           |{
+           |	"jobName": "$jobName",
+           |	"campaignId": $campaignId,
+           |	"reportDate": "$reportDate"
+           |}
           """.stripMargin
-    )
-      .header("Content-Type", "application/json")
-      .option(HttpOptions.readTimeout(10000))
-      .asString
-    decode[Job](response.body)
+      )
+        .header("Content-Type", "application/json")
+        .option(HttpOptions.readTimeout(10000))
+        .asString
+      decode[Job](response.body)
+    }
+    catch {
+      case e: Throwable => Left(ParsingFailure("", new Exception))
+    }
   }
 
   def getResultsFromResultsService(jobId: String): Either[io.circe.Error, LciReportResults] = {
     val url = resultsServiceUrl + "job/" + jobId
-    val response: HttpResponse[String] = Http(url).asString
-    decode[LciReportResults](response.body)
+    try {
+      val response: HttpResponse[String] = Http(url).asString
+      decode[LciReportResults](response.body)
+    }
+    catch {
+      case e: Throwable => Left(ParsingFailure("", new Exception))
+    }
   }
 
   def runTests(results: LciReportResults, shouldBe: LciReportResults): TestResults = {
